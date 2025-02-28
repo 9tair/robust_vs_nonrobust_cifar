@@ -6,6 +6,12 @@ from torch.utils.data import DataLoader, TensorDataset
 from models.get_model import ModelLoader
 import os
 
+# **Manually Select GPU 2 (Third GPU)**
+torch.cuda.set_device(2)  # ✅ Forces PyTorch to use GPU 2
+device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+
+print(f"Using GPU: {torch.cuda.get_device_name(device) if torch.cuda.is_available() else 'CPU'}")
+
 class NonRobustDatasetGenerator:
     def __init__(self, epsilon=8/255, steps=10, alpha=2/255):
         """
