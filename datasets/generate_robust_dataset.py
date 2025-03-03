@@ -2,17 +2,17 @@ import torch
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader
 from models.get_model import ModelLoader
 from models.feature_extractor import FeatureExtractor
 import os
 
-# 1️**Force PyTorch to use GPU 2 (third GPU)**
+# **Force PyTorch to use GPU 3 (third GPU)**
 torch.cuda.set_device(3)
-device = torch.device("cuda:3")
+device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
 
-# 2️**Print GPU details before running**
-print(f"Using GPU: {torch.cuda.get_device_name(device)}")
+# **Print GPU details before running**
+print(f"Using GPU: {torch.cuda.get_device_name(device) if torch.cuda.is_available() else 'CPU'}")
 print(f"Total GPU Memory: {torch.cuda.get_device_properties(device).total_memory / 1024**3:.2f} GB")
 
 # Function to print current memory usage
@@ -22,22 +22,44 @@ def print_memory_usage(msg=""):
     print(f"[{msg}] Allocated: {allocated:.2f} GB | Reserved: {reserved:.2f} GB")
 
 class RobustDatasetGenerator:
-    def __init__(self, steps=1000, lr=0.1):
+    def __init__(self, steps=1000, lr=0.1, checkpoint_path="results/datasets/robust_checkpoint.pth"):
         self.steps = steps
         self.lr = lr
-        self.model = ModelLoader().load_model().to(device).eval()
-        self.feature_extractor = FeatureExtractor(self.model).to(device).eval()
+        self.device = device
+        self.checkpoint_path = checkpoint_path
+        self.start_index = 0  # Default starting index
+
+        self.model = ModelLoader().load_model().to(self.device).eval()
+        self.feature_extractor = FeatureExtractor(self.model).to(self.device).eval()
+
+        # Check for an existing checkpoint
+        if os.path.exists(self.checkpoint_path):
+            self.load_checkpoint()
+
+    def load_checkpoint(self):
+        """Load checkpoint if available."""
+        checkpoint = torch.load(self.checkpoint_path)
+        self.robust_images = checkpoint["robust_images"]
+        self.labels = checkpoint["labels"]
+        self.start_index = checkpoint["last_index"]
+        print(f"✅ Resuming from checkpoint at index {self.start_index}")
+
+    def save_checkpoint(self, robust_images, labels, last_index):
+        """Save the current state as a checkpoint."""
+        torch.save({
+            "robust_images": robust_images,
+            "labels": labels,
+            "last_index": last_index
+        }, self.checkpoint_path)
+        print(f"✅ Checkpoint saved at index {last_index}")
 
     def generate_robust_image(self, original_image, init_image):
         """Optimize init_image to match the robust features of original_image."""
-        original_image, init_image = original_image.to(device), init_image.to(device)
+        original_image, init_image = original_image.to(self.device), init_image.to(self.device)
 
         # Print memory usage before feature extraction
         print_memory_usage("Before feature extraction")
-
         target_features = self.feature_extractor(original_image)
-
-        # Print memory usage after feature extraction
         print_memory_usage("After feature extraction")
 
         init_image.requires_grad = True
@@ -57,8 +79,9 @@ class RobustDatasetGenerator:
         return init_image.detach()
 
     def process_dataset(self):
-        # Reduce batch size to avoid memory issues
-        batch_size = 8  # Lowered from default to reduce memory usage
+        """Process the entire CIFAR-10 dataset, generating robust examples."""
+        batch_size = 8  # Adjust for memory
+        checkpoint_interval = 1000  # Save checkpoint every 1000 images
 
         transform = transforms.Compose([transforms.ToTensor()])
         dataset = datasets.CIFAR10(root="./data", train=True, transform=transform, download=True)
@@ -67,21 +90,31 @@ class RobustDatasetGenerator:
         robust_images, labels = [], []
 
         for i, (image, label) in enumerate(dataloader):
-            print_memory_usage(f"Processing Image {i}")
+            if i < self.start_index:  # Skip already processed images
+                continue
 
+            print_memory_usage(f"Processing Image {i}")
             init_image, _ = next(iter(dataloader))  # Use a random image as init
             robust_image = self.generate_robust_image(image, init_image)
             robust_images.append(robust_image.cpu())
             labels.append(label)
 
-            print_memory_usage(f"After processing Image {i}")
+            # Save checkpoint every 1000 images
+            if i % checkpoint_interval == 0 and i > 0:
+                self.save_checkpoint(robust_images, labels, i)
 
-        torch.save((robust_images, labels), "results/datasets/robust_cifar10.pth")
-        print("Robust dataset saved!")
+        # Save final dataset
+        final_path = "results/datasets/robust_cifar10_final.pth"
+        torch.save((robust_images, labels), final_path)
+        print(f"✅ Final dataset saved at {final_path}")
+
+        # Remove checkpoint after completion
+        if os.path.exists(self.checkpoint_path):
+            os.remove(self.checkpoint_path)
+            print("✅ Checkpoint removed (completed successfully)")
 
 if __name__ == "__main__":
-    # Clear unused GPU memory before starting
-    torch.cuda.empty_cache()
+    torch.cuda.empty_cache()  # Clear unused GPU memory
     print_memory_usage("Before running script")
 
     generator = RobustDatasetGenerator()
