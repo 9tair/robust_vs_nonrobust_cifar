@@ -45,12 +45,17 @@ class RobustDatasetGenerator:
         print(f"✅ Resuming from checkpoint at index {self.start_index}")
 
     def save_checkpoint(self, robust_images, labels, last_index):
-        """Save the current state as a checkpoint."""
+        """Ensure directory exists and save the current state as a checkpoint."""
+        checkpoint_dir = "results/datasets"
+        os.makedirs(checkpoint_dir, exist_ok=True)  # ✅ Ensure directory exists
+
+        checkpoint_path = os.path.join(checkpoint_dir, "robust_checkpoint.pth")
         torch.save({
             "robust_images": robust_images,
             "labels": labels,
             "last_index": last_index
-        }, self.checkpoint_path)
+        }, checkpoint_path)
+    
         print(f"✅ Checkpoint saved at index {last_index}")
 
     def generate_robust_image(self, original_image, init_image):
@@ -79,38 +84,64 @@ class RobustDatasetGenerator:
         return init_image.detach()
 
     def process_dataset(self):
-        """Process the entire CIFAR-10 dataset, generating robust examples."""
-        batch_size = 8  # Adjust for memory
-        checkpoint_interval = 1000  # Save checkpoint every 1000 images
+        """
+        Process the dataset, generating robust images and saving progress every 1000 images.
+        If interrupted, it resumes from the last saved checkpoint.
+        """
+        # ✅ Ensure checkpoint and final save directory exists
+        checkpoint_dir = "results/datasets"
+        os.makedirs(checkpoint_dir, exist_ok=True)
 
+        # Define paths
+        checkpoint_path = os.path.join(checkpoint_dir, "robust_checkpoint.pth")
+        final_path = os.path.join(checkpoint_dir, "robust_cifar10_final.pth")
+
+        # Load CIFAR-10 dataset
+        batch_size = 8  # Adjust based on memory
         transform = transforms.Compose([transforms.ToTensor()])
         dataset = datasets.CIFAR10(root="./data", train=True, transform=transform, download=True)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
         robust_images, labels = [], []
+        start_index = 0  # Default starting index
 
+        # ✅ Load checkpoint if it exists
+        if os.path.exists(checkpoint_path):
+            checkpoint = torch.load(checkpoint_path)
+            robust_images = checkpoint["robust_images"]
+            labels = checkpoint["labels"]
+            start_index = checkpoint["last_index"]
+            print(f"✅ Resuming from checkpoint at index {start_index}")
+
+        # Process dataset from last checkpoint index
         for i, (image, label) in enumerate(dataloader):
-            if i < self.start_index:  # Skip already processed images
+            if i < start_index:  # Skip already processed images
                 continue
 
-            print_memory_usage(f"Processing Image {i}")
+            print(f"Processing image {i}/{len(dataloader.dataset)} on {self.device}")
+
+            # Generate robust image
             init_image, _ = next(iter(dataloader))  # Use a random image as init
             robust_image = self.generate_robust_image(image, init_image)
             robust_images.append(robust_image.cpu())
             labels.append(label)
 
-            # Save checkpoint every 1000 images
-            if i % checkpoint_interval == 0 and i > 0:
-                self.save_checkpoint(robust_images, labels, i)
+            # ✅ Save checkpoint every 1000 images
+            if i % 1000 == 0 and i > 0:
+                torch.save({
+                    "robust_images": robust_images,
+                    "labels": labels,
+                    "last_index": i
+                }, checkpoint_path)
+                print(f"✅ Checkpoint saved at index {i}")
 
-        # Save final dataset
-        final_path = "results/datasets/robust_cifar10_final.pth"
+        # ✅ Save final dataset
         torch.save((robust_images, labels), final_path)
         print(f"✅ Final dataset saved at {final_path}")
 
-        # Remove checkpoint after completion
-        if os.path.exists(self.checkpoint_path):
-            os.remove(self.checkpoint_path)
+        # ✅ Remove checkpoint after successful completion
+        if os.path.exists(checkpoint_path):
+            os.remove(checkpoint_path)
             print("✅ Checkpoint removed (completed successfully)")
 
 if __name__ == "__main__":

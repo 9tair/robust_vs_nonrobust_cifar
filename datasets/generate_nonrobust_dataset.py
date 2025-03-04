@@ -38,12 +38,17 @@ class NonRobustDatasetGenerator:
         print(f"✅ Resuming from checkpoint at index {self.start_index}")
 
     def save_checkpoint(self, non_robust_images, labels, last_index):
-        """Save the current state as a checkpoint."""
+        """Ensure directory exists and save the current state as a checkpoint."""
+        checkpoint_dir = "results/datasets"
+        os.makedirs(checkpoint_dir, exist_ok=True)  # ✅ Ensure directory exists
+
+        checkpoint_path = os.path.join(checkpoint_dir, "nonrobust_checkpoint.pth")
         torch.save({
             "non_robust_images": non_robust_images,
             "labels": labels,
             "last_index": last_index
-        }, self.checkpoint_path)
+        }, checkpoint_path)
+        
         print(f"✅ Checkpoint saved at index {last_index}")
 
     def generate_adversarial_example(self, image, label):
@@ -70,44 +75,64 @@ class NonRobustDatasetGenerator:
 
     def process_dataset(self):
         """
-        Process the entire CIFAR-10 dataset, generating non-robust adversarial examples.
-        Saves progress every N images.
+        Process the dataset, generating adversarial examples and saving progress every 1000 images.
+        If interrupted, it resumes from the last saved checkpoint.
         """
-        batch_size = 8  # Adjust to fit GPU memory
-        checkpoint_interval = 1000  # Save progress every 1000 images
+        # ✅ Ensure checkpoint and final save directory exists
+        checkpoint_dir = "results/datasets"
+        os.makedirs(checkpoint_dir, exist_ok=True)
 
+        # Define paths
+        checkpoint_path = os.path.join(checkpoint_dir, "nonrobust_checkpoint.pth")
+        final_path = os.path.join(checkpoint_dir, "nonrobust_cifar10_final.pth")
+
+        # Load CIFAR-10 dataset
+        batch_size = 8
         transform = transforms.Compose([transforms.ToTensor()])
         dataset = datasets.CIFAR10(root="./data", train=True, transform=transform, download=True)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
         non_robust_images, labels = [], []
+        start_index = 0  # Default starting index
 
-        # Resume processing from checkpoint
+        # ✅ Load checkpoint if it exists
+        if os.path.exists(checkpoint_path):
+            checkpoint = torch.load(checkpoint_path)
+            non_robust_images = checkpoint["non_robust_images"]
+            labels = checkpoint["labels"]
+            start_index = checkpoint["last_index"]
+            print(f"✅ Resuming from checkpoint at index {start_index}")
+
+        # Process dataset from last checkpoint index
         for i, (image, label) in enumerate(dataloader):
-            if i < self.start_index:  # Skip already processed images
+            if i < start_index:  # Skip already processed images
                 continue
 
             print(f"Processing image {i}/{len(dataloader.dataset)} on {self.device}")
 
-            # Generate adversarial examples for each image
+            # Generate adversarial examples
             adversarial_image = self.generate_adversarial_example(image, label)
             non_robust_images.append(adversarial_image.cpu())
             labels.append(label)
 
-            # Save checkpoint every 1000 images
-            if i % checkpoint_interval == 0 and i > 0:
-                self.save_checkpoint(non_robust_images, labels, i)
+            # ✅ Save checkpoint every 1000 images
+            if i % 1000 == 0 and i > 0:
+                torch.save({
+                    "non_robust_images": non_robust_images,
+                    "labels": labels,
+                    "last_index": i
+                }, checkpoint_path)
+                print(f"✅ Checkpoint saved at index {i}")
 
-        # Save final dataset
-        final_path = "results/datasets/nonrobust_cifar10_final.pth"
+        # ✅ Save final dataset
         torch.save((non_robust_images, labels), final_path)
         print(f"✅ Final dataset saved at {final_path}")
 
-        # Remove checkpoint after completion
-        if os.path.exists(self.checkpoint_path):
-            os.remove(self.checkpoint_path)
+        # ✅ Remove checkpoint after successful completion
+        if os.path.exists(checkpoint_path):
+            os.remove(checkpoint_path)
             print("✅ Checkpoint removed (completed successfully)")
-
+        
 if __name__ == "__main__":
     generator = NonRobustDatasetGenerator()
     generator.process_dataset()
